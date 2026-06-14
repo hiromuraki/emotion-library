@@ -1,16 +1,18 @@
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import shutil
 import sqlite3
 import time
+import traceback
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
 from botocore.client import Config as BotoConfig
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, EndpointConnectionError
 from fastapi import FastAPI, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -27,6 +29,12 @@ static_dir.mkdir(exist_ok=True)
 DATA_PATH = Path(os.getenv("DATA_PATH", "/data"))
 DB_PATH = DATA_PATH / "data.db"
 TEMP_EMOTIONS = DATA_PATH / "temp" / "emotions"
+
+_DEBUG = os.getenv("DEBUG", "").lower() in ("1", "true", "yes")
+
+
+def _is_debug() -> bool:
+    return _DEBUG
 
 # ── Temp cleanup timer ──────────────────────────────────────────────────────
 _temp_uploaded_at = time.time()
@@ -258,13 +266,27 @@ async def get_emotion(sha256: str):
             if code == "NoSuchKey":
                 raise HTTPException(status_code=404, detail="Emotion not found")
             raise HTTPException(status_code=500, detail=f"S3 error: {code}")
+        except EndpointConnectionError:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Cannot reach S3 endpoint: {_get_s3().endpoint_url}",
+            )
+        except Exception as exc:
+            detail = f"S3 fetch failed: {exc.__class__.__name__}: {exc}"
+            if _is_debug():
+                detail += f"\n{traceback.format_exc()}"
+            raise HTTPException(status_code=500, detail=detail)
 
     try:
         body = await run_in_threadpool(_fetch)
     except HTTPException:
         raise
-    except Exception:
-        raise HTTPException(status_code=500, detail="Unexpected S3 error")
+    except Exception as exc:
+        detail = f"Unexpected S3 error: {exc.__class__.__name__}: {exc}"
+        if _is_debug():
+            detail += f"\n{traceback.format_exc()}"
+        logging.error("S3 fetch error", exc_info=True)
+        raise HTTPException(status_code=500, detail=detail)
 
     return Response(
         content=body,
@@ -305,9 +327,26 @@ def create_emotion(body: EmotionCreate):
         raise HTTPException(status_code=400, detail="No uploaded file found — upload first")
 
     s3 = _get_s3()
-    if not s3.head(bucket, s3_key):
-        s3.upload(bucket, s3_key, str(temp_file))
-    temp_file.unlink()
+    try:
+        if not s3.head(bucket, s3_key):
+            s3.upload(bucket, s3_key, str(temp_file))
+    except EndpointConnectionError:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Cannot reach S3 endpoint: {s3.endpoint_url}",
+        )
+    except ClientError as exc:
+        code = exc.response["Error"]["Code"]
+        raise HTTPException(status_code=500, detail=f"S3 error: {code}")
+    except Exception as exc:
+        detail = f"S3 upload failed: {exc.__class__.__name__}: {exc}"
+        if _is_debug():
+            detail += f"\n{traceback.format_exc()}"
+        logging.error("S3 upload error", exc_info=True)
+        raise HTTPException(status_code=500, detail=detail)
+    finally:
+        if temp_file.exists():
+            temp_file.unlink()
 
     now = _now()
     db = _get_db()
