@@ -82,7 +82,7 @@ wheels = [
 ]
 
 [[package]]
-name = "emotion-site"
+name = "emotion-library"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
