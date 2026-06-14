@@ -55,6 +55,7 @@ def _reset_temp_timer():
 async def _lifespan(_: FastAPI):
     global _timer_task
     TEMP_EMOTIONS.mkdir(parents=True, exist_ok=True)
+    _init_db()
     _build_tag_cache()
     _timer_task = asyncio.create_task(_temp_cleanup_loop())
     yield
@@ -67,6 +68,32 @@ app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
 
 # ── Database ─────────────────────────────────────────────────────────────────
+def _init_db() -> None:
+    """Create the database file and schema if they donʼt exist."""
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS emotion (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                desc       TEXT    NOT NULL,
+                sha256     TEXT    NOT NULL,
+                tags       TEXT    NOT NULL DEFAULT '[]',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                is_deleted INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_emotion_deleted ON emotion(is_deleted)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_emotion_updated ON emotion(updated_at)")
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _get_db() -> sqlite3.Connection:
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
