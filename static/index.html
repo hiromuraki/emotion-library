@@ -1,0 +1,818 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="auto">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>表情</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --cell-size: 140px;
+    --bg: #f8f9fa;
+    --card-bg: #fff;
+    --text: #333;
+    --text-secondary: #888;
+    --border: #e0e0e0;
+    --accent: #4f46e5;
+    --danger: #dc2626;
+    --skeleton: #e8e8e8;
+    --drawer-w: 260px;
+    --dock-w: 360px;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root[data-theme="auto"] {
+      --bg: #1a1a2e; --card-bg: #252540; --text: #ddd;
+      --text-secondary: #999; --border: #3a3a55;
+      --accent: #818cf8; --danger: #f87171; --skeleton: #333350;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #1a1a2e; --card-bg: #252540; --text: #ddd;
+    --text-secondary: #999; --border: #3a3a55;
+    --accent: #818cf8; --danger: #f87171; --skeleton: #333350;
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg); color: var(--text); min-height: 100vh;
+  }
+
+  .backdrop {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.35);
+    z-index: 30; opacity: 0; pointer-events: none; transition: opacity 0.25s ease;
+  }
+  .backdrop.open { opacity: 1; pointer-events: auto; }
+
+  /* ── Drawer ──────────────────────────────────────────────── */
+  .drawer {
+    position: fixed; top: 0; left: 0; width: var(--drawer-w); height: 100vh;
+    background: var(--card-bg); z-index: 31; display: flex; flex-direction: column;
+    transform: translateX(-100%); transition: transform 0.25s cubic-bezier(0.4,0,0.2,1);
+    box-shadow: 2px 0 12px rgba(0,0,0,0.12); overflow: hidden;
+  }
+  .drawer.open { transform: translateX(0); }
+  .drawer-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 16px; border-bottom: 1px solid var(--border);
+    font-weight: 600; font-size: 14px; flex-shrink: 0;
+  }
+  .drawer-close { width:28px;height:28px;border:none;background:none;font-size:18px;cursor:pointer;color:var(--text-secondary);border-radius:6px;display:flex;align-items:center;justify-content:center; }
+  .drawer-close:hover { background: var(--skeleton); }
+
+  .drawer-selected { flex-shrink:0; max-height:35%; overflow-y:auto; border-bottom:1px solid var(--border); padding:4px 0; }
+  .drawer-selected .pane-title,
+  .drawer-unselected .pane-title { padding:6px 16px; font-size:11px; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.5px; position:sticky; top:0; background:var(--card-bg); }
+  .drawer-selected .tag-item { display:flex; align-items:center; gap:8px; padding:5px 16px; font-size:13px; cursor:pointer; color:var(--accent); font-weight:500; background:color-mix(in srgb,var(--accent) 12%,transparent); border-left:3px solid var(--accent); }
+  .drawer-selected .tag-item:hover { opacity:0.85; }
+  .drawer-unselected { flex:1; display:flex; flex-direction:column; min-height:0; }
+  .drawer-search { padding:6px 12px 8px; flex-shrink:0; }
+  .drawer-search input { width:100%; padding:6px 10px; border:1px solid var(--border); border-radius:8px; font-size:12px; outline:none; background:var(--bg); color:var(--text); }
+  .drawer-search input:focus { border-color:var(--accent); }
+  .drawer-tags { flex:1; overflow-y:auto; padding:2px 0; }
+  .drawer-tags .tag-item { display:flex; align-items:center; gap:8px; padding:5px 16px; font-size:13px; cursor:pointer; border-left:3px solid transparent; }
+  .drawer-tags .tag-item:hover { background:var(--skeleton); }
+  .tag-count { margin-left:auto; font-size:11px; color:var(--text-secondary); background:var(--skeleton); padding:1px 7px; border-radius:10px; min-width:24px; text-align:center; }
+  .tag-empty { padding:20px 16px; text-align:center; font-size:13px; color:var(--text-secondary); }
+
+  /* ── Dock ────────────────────────────────────────────────── */
+  .dock-backdrop { position:fixed; inset:0; background:rgba(0,0,0,0.4); z-index:40; opacity:0; pointer-events:none; transition:opacity 0.25s ease; }
+  .dock-backdrop.open { opacity:1; pointer-events:auto; }
+  .dock {
+    position:fixed; top:0; right:0; width:var(--dock-w); max-width:100vw;
+    height:100vh; background:var(--card-bg); z-index:41; display:flex; flex-direction:column;
+    transform:translateX(100%); transition:transform 0.28s cubic-bezier(0.4,0,0.2,1);
+    box-shadow:-2px 0 12px rgba(0,0,0,0.12);
+  }
+  .dock.open { transform:translateX(0); }
+  .dock-header { display:flex; align-items:center; justify-content:space-between; padding:14px 16px; border-bottom:1px solid var(--border); font-weight:600; font-size:14px; flex-shrink:0; }
+  .dock-close { width:28px;height:28px;border:none;background:none;font-size:18px;cursor:pointer;color:var(--text-secondary);border-radius:6px;display:flex;align-items:center;justify-content:center; }
+  .dock-close:hover { background:var(--skeleton); }
+  .dock-body { flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:16px; }
+  .dock-preview { width:100%; aspect-ratio:1; display:flex; align-items:center; justify-content:center; background:var(--bg); border:1px solid var(--border); border-radius:12px; overflow:hidden; position:relative; }
+  .dock-preview img { max-width:90%; max-height:90%; object-fit:contain; }
+  .dock-preview.drag-over { border-color:var(--accent); border-style:dashed; background:color-mix(in srgb,var(--accent) 8%,transparent); }
+  .dock-preview .drop-hint { text-align:center; color:var(--text-secondary); font-size:13px; pointer-events:none; }
+  .dock-field label { display:block; font-size:11px; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px; }
+  .dock-field input, .dock-field textarea { width:100%; padding:8px 10px; border:1px solid var(--border); border-radius:8px; font-size:13px; font-family:inherit; outline:none; background:var(--bg); color:var(--text); }
+  .dock-field input:focus, .dock-field textarea:focus { border-color:var(--accent); background:var(--card-bg); }
+  .dock-field textarea { min-height:72px; resize:vertical; }
+  .dock-save-row { display:flex; gap:8px; justify-content:flex-end; }
+  .btn-save { padding:8px 24px; border:none; border-radius:8px; background:#16a34a; color:#fff; font-size:13px; font-weight:500; cursor:pointer; }
+  .btn-save:hover { opacity:0.9; }
+  .btn-save:disabled { opacity:0.5; cursor:default; }
+  .btn-delete { padding:8px 24px; border:none; border-radius:8px; background:var(--danger); color:#fff; font-size:13px; font-weight:500; cursor:pointer; }
+  .btn-delete:hover { opacity:0.9; }
+  .dock-actions { display:flex; gap:8px; padding:12px 16px; border-top:1px solid var(--border); flex-shrink:0; }
+  .dock-actions button { flex:1; padding:10px 0; border:none; border-radius:8px; font-size:14px; font-weight:500; cursor:pointer; }
+  .btn-primary { background:var(--accent); color:#fff; }
+  .btn-primary:hover { opacity:0.9; }
+  .btn-secondary { background:var(--skeleton); color:var(--text); }
+  .btn-secondary:hover { opacity:0.8; }
+
+  /* ── Confirm dialog ──────────────────────────────────────── */
+  .confirm-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:50; display:flex; align-items:center; justify-content:center; opacity:0; pointer-events:none; transition:opacity 0.2s; }
+  .confirm-overlay.open { opacity:1; pointer-events:auto; }
+  .confirm-box { background:var(--card-bg); border-radius:12px; padding:24px; max-width:320px; width:90%; text-align:center; box-shadow:0 4px 24px rgba(0,0,0,0.2); }
+  .confirm-box p { margin-bottom:20px; font-size:14px; }
+  .confirm-btns { display:flex; gap:8px; }
+  .confirm-btns button { flex:1; padding:8px 0; border:none; border-radius:8px; font-size:14px; cursor:pointer; }
+  .confirm-cancel { background:var(--skeleton); color:var(--text); }
+  .confirm-ok { background:var(--danger); color:#fff; }
+
+  /* ── Topbar ──────────────────────────────────────────────── */
+  .topbar { position:sticky; top:0; z-index:10; display:flex; align-items:center; gap:12px; padding:10px 16px; background:color-mix(in srgb,var(--card-bg) 85%,transparent); backdrop-filter:blur(12px); border-bottom:1px solid var(--border); }
+  .hamburger { width:36px;height:36px;border:none;background:none;cursor:pointer;border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--text);flex-shrink:0;position:relative; }
+  .hamburger:hover { background:var(--skeleton); }
+  .hamburger .badge { position:absolute; top:2px; right:2px; min-width:16px;height:16px; background:var(--accent); color:#fff; border-radius:8px; font-size:10px; font-weight:600; display:none; align-items:center; justify-content:center; }
+  .hamburger.has-selection .badge { display:flex; }
+  .topbar h1 { font-size:18px; font-weight:600; white-space:nowrap; flex-shrink:0; }
+  .search-box { flex:1; position:relative; }
+  .search-box input { width:100%; padding:7px 10px 7px 30px; border:1px solid var(--border); border-radius:8px; font-size:13px; outline:none; background:var(--bg); color:var(--text); }
+  .search-box input:focus { border-color:var(--accent); }
+  .search-box .search-icon { position:absolute; left:10px; top:50%; transform:translateY(-50%); color:var(--text-secondary); pointer-events:none; }
+
+  .floating-panel { position:fixed; right:16px; top:50%; transform:translateY(-50%); z-index:15; display:flex; flex-direction:column; align-items:center; gap:4px; padding:8px 6px; background:var(--card-bg); border:1px solid var(--border); border-radius:12px; box-shadow:0 2px 12px rgba(0,0,0,0.1); }
+  .fp-btn { width:36px;height:36px;border:none;border-radius:8px;background:transparent;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:16px;color:var(--text); }
+  .fp-btn:hover { background:var(--skeleton); }
+  .fp-slider { writing-mode:vertical-lr; direction:rtl; height:90px; width:24px; accent-color:var(--accent); cursor:pointer; }
+  .fp-zoom-label { text-align:center; font-size:10px; color:var(--text-secondary); font-weight:500; }
+
+  .active-tags { display:flex; flex-wrap:wrap; gap:6px; padding:8px 20px 0; }
+  .chip { display:inline-flex;align-items:center;gap:4px; padding:3px 10px; background:color-mix(in srgb,var(--accent) 12%,transparent); color:var(--accent); border-radius:12px; font-size:12px; font-weight:500; }
+  .chip .chip-x { cursor:pointer; font-size:14px; line-height:1; opacity:0.6; }
+  .chip .chip-x:hover { opacity:1; }
+
+  /* ── Grid ────────────────────────────────────────────────── */
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(var(--cell-size),1fr)); gap:12px; padding:16px 20px 20px; align-content:start; }
+
+  .card { position:relative; background:var(--card-bg); border:1px solid var(--border); border-radius:12px; overflow:hidden; cursor:pointer; transition:box-shadow 0.15s,transform 0.15s; }
+  .card:hover { box-shadow:0 4px 20px rgba(0,0,0,0.15); transform:translateY(-2px); }
+  .card-img-wrap { position:relative; aspect-ratio:1; display:flex; align-items:center; justify-content:center; background:var(--bg); }
+  .card-img-wrap img { max-width:80%; max-height:80%; object-fit:contain; opacity:0; transition:opacity 0.2s; }
+  .card-img-wrap img.loaded { opacity:1; }
+
+  /* add card */
+  .card-add { border-style:dashed; border-color:var(--text-secondary); opacity:0.6; }
+  .card-add:hover { opacity:1; border-color:var(--accent); }
+  .card-add .card-img-wrap { font-size:40px; color:var(--text-secondary); }
+
+  .skeleton { position:absolute; inset:0; background:var(--skeleton); overflow:hidden; }
+  .skeleton::after { content:''; position:absolute; inset:0; background:linear-gradient(90deg,transparent 0%,color-mix(in srgb,var(--card-bg) 40%,transparent) 50%,transparent 100%); animation:shimmer 1.5s infinite; }
+  @keyframes shimmer { 0%{transform:translateX(-100%)} 100%{transform:translateX(100%)} }
+
+  .card-bottom { position:relative; min-height:44px; }
+  .card-info { padding:6px 8px; text-align:center; transition:opacity 0.15s; }
+  .card:hover .card-info { opacity:0; pointer-events:none; }
+  .card-label { font-size:12px; color:var(--text-secondary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .card-tags { display:flex; flex-wrap:wrap; gap:3px; padding:2px 0 0; justify-content:center; }
+  .card-tag { font-size:10px; padding:1px 6px; background:var(--skeleton); color:var(--text-secondary); border-radius:4px; max-width:80px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+  .card-actions { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; gap:10px; padding:4px 8px; opacity:0; transition:opacity 0.15s; }
+  .card:hover .card-actions { opacity:1; }
+  .card-action-btn { flex:1; max-width:100px; padding:8px 0; border:none; border-radius:8px; font-size:13px; font-weight:500; cursor:pointer; display:flex; align-items:center; justify-content:center; }
+  .card-action-btn:active { transform:scale(0.95); }
+  .btn-copy { background:var(--accent); color:#fff; }
+  .btn-download { background:var(--skeleton); color:var(--text); }
+
+  .pagination { display:flex; align-items:center; justify-content:center; flex-wrap:wrap; gap:4px; padding:12px 16px 24px; }
+  .pagination button { padding:6px 12px; border:1px solid var(--border); border-radius:6px; background:var(--card-bg); color:var(--text); font-size:12px; cursor:pointer; }
+  .pagination button:hover:not(:disabled) { background:var(--skeleton); }
+  .pagination button:disabled { opacity:0.4; cursor:default; }
+  .pagination .page-info { font-size:12px; color:var(--text-secondary); padding:0 6px; }
+  .pagination .page-num { width:30px;height:30px;padding:0; border-radius:6px; border:1px solid var(--border); background:var(--card-bg); font-size:12px; cursor:pointer; }
+  .pagination .page-num.active { background:var(--accent); color:#fff; border-color:var(--accent); }
+  .pagination .page-num:hover:not(.active) { background:var(--skeleton); }
+
+  .toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%); background:#333; color:#fff; padding:10px 24px; border-radius:8px; font-size:14px; pointer-events:none; opacity:0; transition:opacity 0.25s; z-index:100; }
+  :root[data-theme="dark"] .toast, :root[data-theme="auto"] .toast { background:#555; }
+  @media (prefers-color-scheme:dark) { :root[data-theme="auto"] .toast { background:#555; } }
+  .toast.visible { opacity:1; }
+  .empty { grid-column:1/-1; text-align:center; padding:60px 20px; color:var(--text-secondary); }
+
+  @media (max-width:640px) {
+    :root { --cell-size:110px; --dock-w:100vw; }
+    .topbar { padding:8px 10px; gap:8px; }
+    .topbar h1 { font-size:15px; }
+    .search-box input { font-size:12px; padding:6px 8px 6px 26px; }
+    .floating-panel { right:8px; padding:4px; gap:2px; }
+    .fp-btn { width:28px;height:28px;font-size:13px; }
+    .fp-slider { height:64px; }
+    .grid { gap:8px; padding:10px 12px 16px; }
+    .pagination { gap:2px; padding:10px 8px 20px; }
+    .pagination button { padding:5px 8px; font-size:11px; }
+    .pagination .page-num { width:26px;height:26px;font-size:11px; }
+    .active-tags { padding:6px 12px 0; }
+    .card-action-btn { font-size:12px; padding:6px 0; }
+    .dock-actions { flex-direction:column; }
+  }
+</style>
+</head>
+<body>
+
+<div class="backdrop" id="backdrop"></div>
+
+<nav class="drawer" id="drawer">
+  <div class="drawer-header">标签<button class="drawer-close" id="drawer-close">&times;</button></div>
+  <div class="drawer-selected" id="pane-selected"><div class="pane-title">已选</div></div>
+  <div class="drawer-unselected">
+    <div class="pane-title">可选</div>
+    <div class="drawer-search"><input type="text" id="tag-search" placeholder="搜索标签…"></div>
+    <div class="drawer-tags" id="pane-unselected"><div class="tag-empty">加载中…</div></div>
+  </div>
+</nav>
+
+<div class="dock-backdrop" id="dock-backdrop"></div>
+
+<aside class="dock" id="dock">
+  <div class="dock-header">
+    <span id="dock-title">表情详情</span>
+    <button class="dock-close" id="dock-close">&times;</button>
+  </div>
+  <div class="dock-body">
+    <div class="dock-preview" id="dock-preview">
+      <div class="skeleton" id="dock-skeleton"></div>
+      <div class="drop-hint" id="dock-drop-hint" style="display:none">拖放图片到此处上传</div>
+    </div>
+    <div class="dock-field">
+      <label for="dock-desc">描述</label>
+      <textarea id="dock-desc" placeholder="表情描述…"></textarea>
+    </div>
+    <div class="dock-field">
+      <label for="dock-tags">标签</label>
+      <input type="text" id="dock-tags" placeholder="以 ; 分割的标签列表…">
+    </div>
+    <div class="dock-save-row">
+      <button class="btn-delete" id="dock-delete" style="display:none">删除</button>
+      <button class="btn-save" id="dock-save">保存</button>
+    </div>
+  </div>
+  <div class="dock-actions">
+    <button class="btn-primary" id="dock-copy">复制</button>
+    <button class="btn-secondary" id="dock-download">下载</button>
+  </div>
+</aside>
+
+<div class="confirm-overlay" id="confirm-overlay">
+  <div class="confirm-box">
+    <p id="confirm-msg">确认删除？</p>
+    <div class="confirm-btns">
+      <button class="confirm-cancel" id="confirm-cancel">取消</button>
+      <button class="confirm-ok" id="confirm-ok">确认</button>
+    </div>
+  </div>
+</div>
+
+<div class="topbar">
+  <button class="hamburger" id="hamburger" aria-label="标签">
+    <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor"><rect y="3" width="20" height="2" rx="1"/><rect y="9" width="20" height="2" rx="1"/><rect y="15" width="20" height="2" rx="1"/></svg>
+    <span class="badge" id="tag-badge"></span>
+  </button>
+  <h1>表情</h1>
+  <div class="search-box">
+    <span class="search-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></span>
+    <input type="text" id="desc-search" placeholder="搜索描述…">
+  </div>
+</div>
+
+<div class="floating-panel">
+  <button class="fp-btn" id="dark-toggle" title="切换主题">◐</button>
+  <input type="range" class="fp-slider" id="zoom" min="80" max="280" value="140" step="20" title="缩放">
+  <span class="fp-zoom-label" id="zoom-label">中</span>
+</div>
+
+<div class="active-tags" id="active-tags"></div>
+
+<div class="grid" id="grid"></div>
+<div class="pagination" id="pagination"></div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const grid = document.getElementById('grid');
+const pagination = document.getElementById('pagination');
+const drawer = document.getElementById('drawer');
+const backdrop = document.getElementById('backdrop');
+const hamburger = document.getElementById('hamburger');
+const drawerCloseBtn = document.getElementById('drawer-close');
+const tagBadge = document.getElementById('tag-badge');
+const paneSelected = document.getElementById('pane-selected');
+const paneUnselected = document.getElementById('pane-unselected');
+const tagSearch = document.getElementById('tag-search');
+const descSearch = document.getElementById('desc-search');
+const activeTagsEl = document.getElementById('active-tags');
+const darkToggle = document.getElementById('dark-toggle');
+const zoomSlider = document.getElementById('zoom');
+const zoomLabel = document.getElementById('zoom-label');
+const toast = document.getElementById('toast');
+
+const dock = document.getElementById('dock');
+const dockBackdrop = document.getElementById('dock-backdrop');
+const dockTitle = document.getElementById('dock-title');
+const dockCloseBtn = document.getElementById('dock-close');
+const dockPreview = document.getElementById('dock-preview');
+const dockSkeleton = document.getElementById('dock-skeleton');
+const dockDropHint = document.getElementById('dock-drop-hint');
+const dockDesc = document.getElementById('dock-desc');
+const dockTags = document.getElementById('dock-tags');
+const dockSave = document.getElementById('dock-save');
+const dockDelete = document.getElementById('dock-delete');
+const dockCopy = document.getElementById('dock-copy');
+const dockDownload = document.getElementById('dock-download');
+
+const confirmOverlay = document.getElementById('confirm-overlay');
+const confirmMsg = document.getElementById('confirm-msg');
+const confirmOk = document.getElementById('confirm-ok');
+const confirmCancel = document.getElementById('confirm-cancel');
+
+let currentDockEmotion = null; // { sha256, desc, tags }
+let dockMode = 'view'; // 'view' | 'edit' | 'create'
+let dockModified = false;
+let pendingSha256 = null; // uploaded sha256 in create mode
+let confirmResolve = null;
+
+const PAGE_SIZE = 100;
+let currentPage = 1;
+let totalPages = 1;
+let allTags = { tags: [], untagged: 0 };
+let selectedTags = new Set();
+let untaggedSelected = false;
+let descQuery = '';
+
+// ── Confirm dialog ──────────────────────────────────────────
+function confirm(msg) {
+  return new Promise(resolve => {
+    confirmMsg.textContent = msg;
+    confirmResolve = resolve;
+    confirmOverlay.classList.add('open');
+  });
+}
+confirmOk.addEventListener('click', () => {
+  confirmOverlay.classList.remove('open');
+  if (confirmResolve) { confirmResolve(true); confirmResolve = null; }
+});
+confirmCancel.addEventListener('click', () => {
+  confirmOverlay.classList.remove('open');
+  if (confirmResolve) { confirmResolve(false); confirmResolve = null; }
+});
+
+// ── Dark mode ───────────────────────────────────────────────
+const THEMES = ['auto','dark','light'];
+const THEME_ICONS = { auto:'◐', dark:'◑', light:'◕' };
+function getTheme() { return document.documentElement.getAttribute('data-theme')||'auto'; }
+function setTheme(t) { document.documentElement.setAttribute('data-theme',t); localStorage.setItem('theme',t); darkToggle.textContent=THEME_ICONS[t]; }
+setTheme(localStorage.getItem('theme')||'auto');
+darkToggle.addEventListener('click',()=>{ const cur=THEMES.indexOf(getTheme()); setTheme(THEMES[(cur+1)%THEMES.length]); });
+
+// ── URL sync ────────────────────────────────────────────────
+function readURL() {
+  const p = new URLSearchParams(location.search);
+  currentPage = Math.max(1,parseInt(p.get('page'))||1);
+  descQuery = p.get('desc')||'';
+  selectedTags = new Set(p.get('tags')?p.get('tags').split(';').filter(Boolean):[]);
+  descSearch.value = descQuery;
+}
+function writeURL() {
+  const p = new URLSearchParams();
+  if (currentPage>1) p.set('page',currentPage);
+  if (descQuery) p.set('desc',descQuery);
+  if (selectedTags.size) p.set('tags',[...selectedTags].join(';'));
+  history.replaceState(null,'',p.toString()?`?${p}`:location.pathname);
+}
+window.addEventListener('popstate',()=>{ readURL(); refreshAll(); });
+
+// ── Drawer ──────────────────────────────────────────────────
+function openDrawer(){ drawer.classList.add('open'); backdrop.classList.add('open'); }
+function closeDrawer(){ drawer.classList.remove('open'); backdrop.classList.remove('open'); }
+hamburger.addEventListener('click',()=>{ drawer.classList.contains('open')?closeDrawer():openDrawer(); });
+drawerCloseBtn.addEventListener('click',closeDrawer);
+backdrop.addEventListener('click',closeDrawer);
+document.addEventListener('keydown',(e)=>{ if(e.key==='Escape'){ if(dock.classList.contains('open')) closeDock(); else if(drawer.classList.contains('open')) closeDrawer(); }});
+
+function updateHamburgerBadge(){ const n=selectedTags.size+(untaggedSelected?1:0); if(n){ hamburger.classList.add('has-selection'); tagBadge.textContent=n>9?'9+':n; } else hamburger.classList.remove('has-selection'); }
+
+// ── Dock ────────────────────────────────────────────────────
+function resetDockUI() {
+  dockSkeleton.style.display = 'block';
+  dockDropHint.style.display = 'none';
+  dockDesc.value = '';
+  dockTags.value = '';
+  dockModified = false;
+  dockSave.disabled = true;
+  dockDelete.style.display = 'none';
+  dockSave.textContent = '保存';
+  pendingSha256 = null;
+}
+
+function openDock(sha256, desc, tags) {
+  dockMode = 'edit';
+  dockTitle.textContent = '表情详情';
+  resetDockUI();
+  currentDockEmotion = { sha256, desc, tags };
+  // Load preview
+  dockPreview.querySelectorAll('img').forEach(e=>e.remove());
+  const img = document.createElement('img');
+  img.src = `/emotions/${sha256}`;
+  img.alt = esc(desc);
+  img.onload = () => { dockSkeleton.style.display = 'none'; img.classList.add('loaded'); };
+  img.onerror = () => { dockSkeleton.style.display = 'none'; dockDropHint.style.display = 'none'; };
+  dockPreview.appendChild(img);
+  dockDesc.value = desc;
+  dockTags.value = (tags||[]).join('; ');
+  dockDelete.style.display = '';
+  dock.classList.add('open');
+  dockBackdrop.classList.add('open');
+}
+
+function openDockCreate() {
+  dockMode = 'create';
+  dockTitle.textContent = '添加表情';
+  resetDockUI();
+  currentDockEmotion = null;
+  dockPreview.querySelectorAll('img').forEach(e=>e.remove());
+  dockDropHint.style.display = '';
+  dockSkeleton.style.display = 'none';
+  dockTags.value = [...selectedTags].join('; ');
+  dockSave.textContent = '提交';
+  dock.classList.add('open');
+  dockBackdrop.classList.add('open');
+}
+
+function closeDock() {
+  dock.classList.remove('open');
+  dockBackdrop.classList.remove('open');
+  currentDockEmotion = null;
+  dockModified = false;
+}
+
+dockCloseBtn.addEventListener('click', closeDock);
+dockBackdrop.addEventListener('click', closeDock);
+
+dockDesc.addEventListener('input', () => { dockModified = true; dockSave.disabled = false; });
+dockTags.addEventListener('input', () => { dockModified = true; dockSave.disabled = false; });
+
+// Drag & drop upload
+dockPreview.addEventListener('dragover', e => {
+  if (dockMode !== 'create') return;
+  e.preventDefault();
+  dockPreview.classList.add('drag-over');
+});
+dockPreview.addEventListener('dragleave', () => dockPreview.classList.remove('drag-over'));
+dockPreview.addEventListener('drop', async e => {
+  e.preventDefault();
+  dockPreview.classList.remove('drag-over');
+  if (dockMode !== 'create') return;
+  const file = e.dataTransfer.files[0];
+  if (!file) return;
+  await uploadFile(file);
+});
+
+dockPreview.addEventListener('click', () => {
+  if (dockMode !== 'create') return;
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'image/*';
+  input.onchange = async () => { if (input.files[0]) await uploadFile(input.files[0]); };
+  input.click();
+});
+
+async function uploadFile(file) {
+  const form = new FormData();
+  form.append('file', file);
+  // Clear old preview and ensure hint is visible
+  dockPreview.querySelectorAll('img').forEach(e=>e.remove());
+  dockDropHint.style.display = '';
+  dockDropHint.textContent = '上传中…';
+  try {
+    const res = await fetch('/emotions/upload', { method: 'POST', body: form });
+    if (!res.ok) throw new Error(await res.text());
+    const { sha256 } = await res.json();
+    pendingSha256 = sha256;
+    const img = document.createElement('img');
+    img.src = URL.createObjectURL(file);
+    img.onload = () => { dockDropHint.style.display = 'none'; img.classList.add('loaded'); };
+    dockPreview.appendChild(img);
+    dockSave.disabled = false;
+  } catch (err) {
+    dockDropHint.textContent = '上传失败: ' + err.message;
+    pendingSha256 = null;
+    dockSave.disabled = true;
+  }
+}
+
+// Save / Submit
+dockSave.addEventListener('click', async () => {
+  const desc = dockDesc.value.trim();
+  const tags = dockTags.value.split(';').map(t=>t.trim()).filter(Boolean);
+
+  if (dockMode === 'create') {
+    if (!pendingSha256) { showToast('请先上传图片'); return; }
+    dockSave.textContent = '提交中…';
+    dockSave.disabled = true;
+    try {
+      const res = await fetch('/emotions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ desc, tags, sha256: pendingSha256 }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      showToast('已添加');
+      closeDock();
+      await refreshTags();
+      loadPage(1);
+    } catch (err) {
+      showToast('添加失败: ' + err.message);
+      dockSave.textContent = '提交';
+      dockSave.disabled = false;
+    }
+    return;
+  }
+
+  if (!currentDockEmotion) return;
+  const sha256 = currentDockEmotion.sha256;
+  dockSave.textContent = '保存中…';
+  dockSave.disabled = true;
+  try {
+    const res = await fetch(`/emotions/${sha256}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ desc, tags }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    currentDockEmotion = { sha256, desc, tags };
+    dockModified = false;
+    dockSave.textContent = '保存';
+    dockSave.disabled = true;
+    showToast('已保存');
+    await refreshTags();
+    loadPage(currentPage, true);
+  } catch (err) {
+    showToast('保存失败: ' + err.message);
+    dockSave.textContent = '保存';
+    dockSave.disabled = false;
+  }
+});
+
+// Delete
+dockDelete.addEventListener('click', async () => {
+  if (!currentDockEmotion) return;
+  const ok = await confirm(`确认删除 "${currentDockEmotion.desc}"？`);
+  if (!ok) return;
+  try {
+    const res = await fetch(`/emotions/${currentDockEmotion.sha256}`, { method: 'DELETE' });
+    if (!res.ok) throw new Error(await res.text());
+    showToast('已删除');
+    closeDock();
+    await refreshTags();
+    loadPage(currentPage, true);
+  } catch (err) {
+    showToast('删除失败: ' + err.message);
+  }
+});
+
+dockCopy.addEventListener('click', () => {
+  if (currentDockEmotion) copyEmotion(currentDockEmotion.sha256);
+});
+dockDownload.addEventListener('click', () => {
+  if (currentDockEmotion) downloadEmotion(currentDockEmotion.sha256, currentDockEmotion.desc);
+});
+
+// ── Zoom ────────────────────────────────────────────────────
+function zoomLabelText(v) {
+  const n = parseInt(v);
+  if (n <= 100) return '极小'; if (n <= 140) return '小';
+  if (n <= 180) return '中'; if (n <= 220) return '大';
+  return '极大';
+}
+zoomSlider.addEventListener('input', () => {
+  document.documentElement.style.setProperty('--cell-size', zoomSlider.value + 'px');
+  zoomLabel.textContent = zoomLabelText(zoomSlider.value);
+  localStorage.setItem('cellSize', zoomSlider.value);
+});
+
+// ── Toast ───────────────────────────────────────────────────
+let toastTimer;
+function showToast(msg) {
+  clearTimeout(toastTimer);
+  toast.textContent = msg;
+  toast.classList.add('visible');
+  toastTimer = setTimeout(() => toast.classList.remove('visible'), 1800);
+}
+
+// ── Copy / Download ─────────────────────────────────────────
+async function copyEmotion(sha256) {
+  const url = `/emotions/${sha256}`;
+  try { const r=await fetch(url); if(!r.ok)throw new Error('Fetch failed'); const b=await r.blob(); await navigator.clipboard.write([new ClipboardItem({[b.type]:b})]); showToast('已复制'); return; } catch {}
+  try { const img=new Image(); img.crossOrigin='anonymous'; await new Promise((rs,rj)=>{ img.onload=rs; img.onerror=()=>rj(new Error('fail')); img.src=url; }); const c=document.createElement('canvas'); c.width=img.naturalWidth; c.height=img.naturalHeight; c.getContext('2d').drawImage(img,0,0); const png=await new Promise(r=>c.toBlob(r,'image/png')); await navigator.clipboard.write([new ClipboardItem({'image/png':png})]); showToast('已复制'); return; } catch {}
+  try { await navigator.clipboard.writeText(`${location.origin}${url}`); showToast('已复制链接'); } catch { showToast('复制失败'); }
+}
+function downloadEmotion(sha256, desc) {
+  const a=document.createElement('a'); a.href=`/emotions/${sha256}`; a.download=desc||sha256; document.body.appendChild(a); a.click(); a.remove(); showToast('下载中…');
+}
+
+function esc(str) { const d=document.createElement('div'); d.textContent=str; return d.innerHTML; }
+
+function buildUrl(page) {
+  const p = new URLSearchParams();
+  p.set('page',page); p.set('page_size',PAGE_SIZE);
+  if(descQuery) p.set('desc',descQuery);
+  let tagsStr = [...selectedTags].join(';');
+  if (untaggedSelected) tagsStr = tagsStr ? tagsStr + ';' : ';';
+  if(tagsStr) p.set('tags', tagsStr);
+  return '/emotions?'+p.toString();
+}
+
+// ── Render ──────────────────────────────────────────────────
+function renderCards(items) {
+  grid.innerHTML = '';
+
+  // Add card (always first, only on page 1 with no filters)
+  if (currentPage === 1 && !descQuery && !selectedTags.size) {
+    const addCard = document.createElement('div');
+    addCard.className = 'card card-add';
+    addCard.innerHTML = '<div class="card-img-wrap">+</div><div class="card-bottom"><div class="card-info"><div class="card-label">添加表情</div></div></div>';
+    addCard.addEventListener('click', () => openDockCreate());
+    grid.appendChild(addCard);
+  }
+
+  if (!items.length) {
+    if (grid.children.length === 0) grid.innerHTML = '<div class="empty">没有匹配的表情</div>';
+    return;
+  }
+
+  items.forEach(emo => {
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.dataset.id = emo.sha256;
+    card.dataset.desc = esc(emo.desc);
+    card.dataset.tags = esc((emo.tags||[]).join(';'));
+    card.innerHTML = `
+      <div class="card-img-wrap">
+        <div class="skeleton"></div>
+        <img src="/emotions/${emo.sha256}" alt="${esc(emo.desc)}" loading="lazy"
+             onload="this.previousElementSibling.remove();this.classList.add('loaded')"
+             onerror="this.previousElementSibling.remove()">
+      </div>
+      <div class="card-bottom">
+        <div class="card-info">
+          <div class="card-label">${esc(emo.desc)}</div>
+          ${emo.tags&&emo.tags.length ? `<div class="card-tags">${emo.tags.map(t=>`<span class="card-tag">${esc(t)}</span>`).join('')}</div>` : ''}
+        </div>
+        <div class="card-actions">
+          <button class="card-action-btn btn-copy" data-action="copy">复制</button>
+          <button class="card-action-btn btn-download" data-action="download">下载</button>
+        </div>
+      </div>`;
+    card.addEventListener('click', e => {
+      if (e.target.closest('.card-action-btn')) return;
+      const tags = card.dataset.tags ? card.dataset.tags.split(';').filter(Boolean) : [];
+      openDock(card.dataset.id, card.dataset.desc, tags);
+    });
+    card.querySelectorAll('.card-action-btn').forEach(btn => {
+      btn.addEventListener('click', e => {
+        e.stopPropagation();
+        if (btn.dataset.action === 'copy') copyEmotion(card.dataset.id);
+        else downloadEmotion(card.dataset.id, card.dataset.desc);
+      });
+    });
+    grid.appendChild(card);
+  });
+}
+
+function renderPagination(total, page) {
+  totalPages = Math.ceil(total/PAGE_SIZE);
+  currentPage = page;
+  if (totalPages<=1) { pagination.innerHTML=''; return; }
+  const MAX=5;
+  let pages=[];
+  if (totalPages<=MAX+2) { for(let i=1;i<=totalPages;i++) pages.push(i); }
+  else {
+    pages.push(1);
+    let start=Math.max(2,page-1), end=Math.min(totalPages-1,page+1);
+    if(page<=3) end=Math.min(MAX,totalPages-1);
+    if(page>=totalPages-2) start=Math.max(2,totalPages-MAX+1);
+    if(start>2) pages.push('...');
+    for(let i=start;i<=end;i++) pages.push(i);
+    if(end<totalPages-1) pages.push('...');
+    pages.push(totalPages);
+  }
+  pagination.innerHTML = `
+    <button id="btn-first" ${page===1?'disabled':''}>&laquo;</button>
+    <button id="btn-prev" ${page===1?'disabled':''}>&lsaquo;</button>
+    ${pages.map(p=>p==='...'?'<span class="page-info">...</span>':`<button class="page-num${p===page?' active':''}" data-page="${p}">${p}</button>`).join('')}
+    <button id="btn-next" ${page===totalPages?'disabled':''}>&rsaquo;</button>
+    <button id="btn-last" ${page===totalPages?'disabled':''}>&raquo;</button>
+    <span class="page-info">${page}/${totalPages} &middot; ${total}</span>
+  `;
+  pagination.querySelectorAll('.page-num').forEach(b=>b.addEventListener('click',()=>loadPage(parseInt(b.dataset.page))));
+  document.getElementById('btn-first').addEventListener('click',()=>loadPage(1));
+  document.getElementById('btn-prev').addEventListener('click',()=>loadPage(page-1));
+  document.getElementById('btn-next').addEventListener('click',()=>loadPage(page+1));
+  document.getElementById('btn-last').addEventListener('click',()=>loadPage(totalPages));
+}
+
+function renderDrawer(filter) {
+  // Selected pane
+  let selHtml = '';
+  if (untaggedSelected) {
+    selHtml += `<div class="tag-item" data-tag="">无标签 <span class=tag-count>${allTags.untagged}</span> &times;</div>`;
+  }
+  if (selectedTags.size) {
+    selHtml += [...selectedTags].map(t => {
+      const info = allTags.tags.find(x=>x.name===t);
+      return `<div class="tag-item" data-tag="${esc(t)}">${esc(t)}${info?` <span class=tag-count>${info.count}</span>`:''} &times;</div>`;
+    }).join('');
+  }
+  paneSelected.innerHTML = selHtml
+    ? '<div class="pane-title">已选</div>' + selHtml
+    : '<div class="pane-title">已选</div>';
+  paneSelected.querySelectorAll('.tag-item').forEach(el => {
+    el.addEventListener('click', () => {
+      const t = el.dataset.tag;
+      if (t === '') untaggedSelected = false;
+      else selectedTags.delete(t);
+      refreshAll();
+    });
+  });
+
+  // Unselected pane
+  let unselTags = allTags.tags.filter(t => !selectedTags.has(t.name));
+  if (filter) { const q = filter.toLowerCase(); unselTags = unselTags.filter(t => t.name.toLowerCase().includes(q)); }
+
+  let unselHtml = '';
+  if (!untaggedSelected && (!filter || '无标签'.includes(filter))) {
+    unselHtml += `<div class="tag-item" data-tag="">无标签 <span class="tag-count">${allTags.untagged}</span></div>`;
+  }
+  unselHtml += unselTags.length
+    ? unselTags.map(t => `<div class="tag-item" data-tag="${esc(t.name)}">${esc(t.name)} <span class="tag-count">${t.count}</span></div>`).join('')
+    : (!untaggedSelected && allTags.untagged === 0 ? '<div class="tag-empty">没有匹配的标签</div>' : '');
+
+  paneUnselected.innerHTML = unselHtml || paneUnselected.innerHTML;
+  paneUnselected.querySelectorAll('.tag-item').forEach(el => {
+    el.addEventListener('click', () => {
+      const t = el.dataset.tag;
+      if (t === '') untaggedSelected = true;
+      else selectedTags.add(t);
+      refreshAll();
+    });
+  });
+}
+
+function renderActivePills() {
+  if (!selectedTags.size && !untaggedSelected) { activeTagsEl.innerHTML=''; return; }
+  let h = '';
+  if (untaggedSelected) h += `<span class="chip">无标签<span class="chip-x" data-tag="">&times;</span></span>`;
+  h += [...selectedTags].map(t=>`<span class="chip">${esc(t)}<span class="chip-x" data-tag="${esc(t)}">&times;</span></span>`).join('');
+  activeTagsEl.innerHTML = h;
+  activeTagsEl.querySelectorAll('.chip-x').forEach(x=>x.addEventListener('click',()=>{
+    if (x.dataset.tag === '') untaggedSelected = false;
+    else selectedTags.delete(x.dataset.tag);
+    refreshAll();
+  }));
+}
+
+function refreshAll() { writeURL(); renderDrawer(tagSearch.value); renderActivePills(); updateHamburgerBadge(); loadPage(1); }
+
+async function refreshTags() {
+  try { const res=await fetch('/tags'); if(res.ok) allTags=await res.json(); } catch {}
+  renderDrawer(tagSearch.value);
+  renderActivePills();
+}
+
+async function loadPage(page, keepScroll=false) {
+  const savedScroll = keepScroll ? window.scrollY : 0;
+  grid.innerHTML = '<div class="empty">加载中…</div>';
+  pagination.innerHTML = '';
+  currentPage = page;
+  try {
+    const res = await fetch(buildUrl(page));
+    if (!res.ok) throw new Error('请求失败');
+    const data = await res.json();
+    renderCards(data.items);
+    renderPagination(data.total, data.page);
+    writeURL();
+    window.scrollTo({ top: savedScroll });
+  } catch (err) {
+    grid.innerHTML = `<div class="empty">加载失败: ${err.message}</div>`;
+  }
+}
+
+// ── Init ────────────────────────────────────────────────────
+async function init() {
+  const savedSize = localStorage.getItem('cellSize');
+  if (savedSize) { zoomSlider.value=savedSize; document.documentElement.style.setProperty('--cell-size',savedSize+'px'); zoomLabel.textContent=zoomLabelText(savedSize); }
+  readURL();
+  await refreshTags();
+  renderActivePills();
+  updateHamburgerBadge();
+  tagSearch.addEventListener('input',()=>renderDrawer(tagSearch.value));
+  let descTimer;
+  descSearch.addEventListener('input',()=>{ clearTimeout(descTimer); descTimer=setTimeout(()=>{ descQuery=descSearch.value.trim(); refreshAll(); },400); });
+  loadPage(currentPage);
+}
+
+init();
+</script>
+</body>
+</html>

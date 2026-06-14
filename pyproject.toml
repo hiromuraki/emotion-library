@@ -1,0 +1,12 @@
+[project]
+name = "emotion-site"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "fastapi>=0.136.3",
+    "boto3>=1.38.0",
+    "uvicorn>=0.38.0",
+    "python-multipart>=0.0.32",
+]
