@@ -38,4 +38,4 @@ EXPOSE 8000
 
 # 11. 启动
 # HOST / PORT 环境变量控制监听地址和端口，默认 0.0.0.0:8000
-CMD uv run uvicorn src.main:app --host "${HOST:-0.0.0.0}" --port "${PORT:-8000}"
+CMD ["sh", "-c", "exec uv run uvicorn src.main:app --host \"${HOST:-0.0.0.0}\" --port \"${PORT:-8000}\""]
