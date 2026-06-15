@@ -186,7 +186,7 @@ def list_tags():
 @app.get("/emotions")
 def list_emotions(
     page: int = Query(1, ge=1),
-    page_size: int = Query(200, ge=1, le=500),
+    page_size: int = Query(50, ge=1, le=500),
     desc: str | None = Query(None),
     tags: str | None = Query(None),
 ):
