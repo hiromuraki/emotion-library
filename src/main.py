@@ -266,11 +266,13 @@ async def get_emotion(sha256: str):
             if code == "NoSuchKey":
                 raise HTTPException(status_code=404, detail="Emotion not found")
             raise HTTPException(status_code=500, detail=f"S3 error: {code}")
-        except EndpointConnectionError:
-            raise HTTPException(
-                status_code=502,
-                detail=f"Cannot reach S3 endpoint: {_get_s3().endpoint_url}",
-            )
+        except EndpointConnectionError as exc:
+            cause = exc.__cause__
+            cause_info = f": {cause.__class__.__name__}: {cause}" if cause else ""
+            detail = f"Cannot reach S3 endpoint: {_get_s3().endpoint_url}{cause_info}"
+            if _is_debug():
+                detail += f"\n{traceback.format_exc()}"
+            raise HTTPException(status_code=502, detail=detail)
         except Exception as exc:
             detail = f"S3 fetch failed: {exc.__class__.__name__}: {exc}"
             if _is_debug():
@@ -330,11 +332,13 @@ def create_emotion(body: EmotionCreate):
     try:
         if not s3.head(bucket, s3_key):
             s3.upload(bucket, s3_key, str(temp_file))
-    except EndpointConnectionError:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Cannot reach S3 endpoint: {s3.endpoint_url}",
-        )
+    except EndpointConnectionError as exc:
+        cause = exc.__cause__
+        cause_info = f": {cause.__class__.__name__}: {cause}" if cause else ""
+        detail = f"Cannot reach S3 endpoint: {s3.endpoint_url}{cause_info}"
+        if _is_debug():
+            detail += f"\n{traceback.format_exc()}"
+        raise HTTPException(status_code=502, detail=detail)
     except ClientError as exc:
         code = exc.response["Error"]["Code"]
         raise HTTPException(status_code=500, detail=f"S3 error: {code}")
