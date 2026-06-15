@@ -6,17 +6,19 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
+from src.db import CREATE_TABLE_SQL, INDEX_SQLS
+
 BASE_PREFIX = "S:\\OneDrive-Now\\OneDrive\\个人文件\\表情\\"
-CATALOG_FILE = Path(__file__).parent / "表情-目录表.txt"
-DATA_PATH = Path(os.getenv("DATA_PATH", str(Path(__file__).parent.parent / "data")))
+CATALOG_FILE = Path(__file__).parent / "data/表情-目录表.txt"
+DATA_PATH = Path(os.getenv("DATA_PATH", str(Path(__file__).parent / "data")))
 DB_FILE = DATA_PATH / "data.db"
 SKIP_TAG = "bilibiliEmotions"
 
 _now = int(datetime.now(timezone.utc).timestamp())
 
 
-def parse_line(line: str) -> tuple[str, str, str] | None:
-    """Return (desc, sha256, tags_json) or None."""
+def parse_line(line: str) -> tuple[str, str, str, str] | None:
+    """Return (desc, sha256, tags_json, format) or None."""
     line = line.strip()
     if not line:
         return None
@@ -45,15 +47,25 @@ def parse_line(line: str) -> tuple[str, str, str] | None:
 
     relative = relative.replace("\\", "/").lstrip("/")
 
-    # Strip file extension from desc
-    desc = relative.rsplit(".", 1)[0] if "." in relative else relative
+    # Split path: parent dirs → tags, filename → desc + format
+    parts = relative.split("/")
+    filename = parts[-1] if parts else relative
+
+    # desc = filename without extension; format = lowercased extension
+    if "." in filename:
+        desc, fmt = filename.rsplit(".", 1)
+        fmt = fmt.lower()
+        if fmt in ("jpeg", "jpe"):
+            fmt = "jpg"
+    else:
+        desc = filename
+        fmt = ""
 
     # Extract tags from parent directories, skip excluded tags
-    parts = relative.split("/")
     dirs = parts[:-1] if len(parts) > 1 else []
     tags = [d for d in dirs if d != SKIP_TAG]
 
-    return desc, sha256, json.dumps(tags, ensure_ascii=False)
+    return desc, sha256, json.dumps(tags, ensure_ascii=False), fmt
 
 
 def main() -> None:
@@ -61,28 +73,16 @@ def main() -> None:
         DB_FILE.unlink()
         print(f"Removed existing {DB_FILE}")
 
+    DB_FILE.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(DB_FILE))
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
-
-    conn.execute(
-        """
-        CREATE TABLE emotion (
-            id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            desc       TEXT    NOT NULL,
-            sha256     TEXT    NOT NULL,
-            tags       TEXT    NOT NULL DEFAULT '[]',
-            created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL,
-            is_deleted INTEGER NOT NULL DEFAULT 0
-        )
-        """
-    )
+    conn.execute(CREATE_TABLE_SQL)
 
     raw = CATALOG_FILE.read_text(encoding="utf-8")
     lines = raw.splitlines()
 
-    batch: list[tuple[str, str, str, str, str]] = []
+    batch: list[tuple[str, str, str, str, str, str]] = []
     skipped = 0
 
     for line in lines:
@@ -90,29 +90,29 @@ def main() -> None:
         if parsed is None:
             skipped += 1
             continue
-        desc, sha256, tags_json = parsed
-        batch.append((desc, sha256, tags_json, _now, _now))
+        desc, sha256, tags_json, fmt = parsed
+        batch.append((desc, sha256, tags_json, fmt, _now, _now))
 
         if len(batch) >= 1000:
             conn.executemany(
-                "INSERT INTO emotion (desc, sha256, tags, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO emotion (desc, sha256, tags, format, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
                 batch,
             )
             batch.clear()
 
     if batch:
         conn.executemany(
-            "INSERT INTO emotion (desc, sha256, tags, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO emotion (desc, sha256, tags, format, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
             batch,
         )
 
     conn.commit()
 
     count = conn.execute("SELECT COUNT(*) FROM emotion").fetchone()[0]
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_emotion_deleted ON emotion(is_deleted)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_emotion_updated ON emotion(updated_at)")
+    for sql in INDEX_SQLS:
+        conn.execute(sql)
     conn.commit()
     conn.close()
 

@@ -4,7 +4,6 @@ import json
 import logging
 import os
 import shutil
-import sqlite3
 import time
 import traceback
 from contextlib import asynccontextmanager
@@ -20,6 +19,7 @@ from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
 from src.storages.s3 import CommonS3Client
+from src.db import get_db, init_db, build_tag_cache
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).parent.parent
@@ -63,8 +63,8 @@ def _reset_temp_timer():
 async def _lifespan(_: FastAPI):
     global _timer_task
     TEMP_EMOTIONS.mkdir(parents=True, exist_ok=True)
-    _init_db()
-    _build_tag_cache()
+    init_db(DB_PATH)
+    _refresh_tag_cache()
     _timer_task = asyncio.create_task(_temp_cleanup_loop())
     yield
     if _timer_task:
@@ -75,65 +75,14 @@ app = FastAPI(title="Emotion Site", lifespan=_lifespan)
 app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
 
-# ── Database ─────────────────────────────────────────────────────────────────
-def _init_db() -> None:
-    """Create the database file and schema if they donʼt exist."""
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(DB_PATH))
-    try:
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS emotion (
-                id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                desc       TEXT    NOT NULL,
-                sha256     TEXT    NOT NULL,
-                tags       TEXT    NOT NULL DEFAULT '[]',
-                created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL,
-                is_deleted INTEGER NOT NULL DEFAULT 0
-            )
-            """
-        )
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_emotion_deleted ON emotion(is_deleted)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_emotion_updated ON emotion(updated_at)")
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def _get_db() -> sqlite3.Connection:
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    return conn
-
-
 # ── Tag cache ────────────────────────────────────────────────────────────────
 _tag_list: list[dict] = []
 _untagged_count: int = 0
 
 
-def _build_tag_cache() -> None:
+def _refresh_tag_cache() -> None:
     global _tag_list, _untagged_count
-    db = _get_db()
-    try:
-        rows = db.execute(
-            "SELECT tags FROM emotion WHERE is_deleted = 0"
-        ).fetchall()
-        counts: dict[str, int] = {}
-        untagged = 0
-        for r in rows:
-            tag_list = json.loads(r["tags"])
-            if tag_list:
-                for tag in tag_list:
-                    counts[tag] = counts.get(tag, 0) + 1
-            else:
-                untagged += 1
-        _tag_list = [{"name": k, "count": v} for k, v in sorted(counts.items())]
-        _untagged_count = untagged
-    finally:
-        db.close()
+    _tag_list, _untagged_count = build_tag_cache(DB_PATH)
 
 
 # ── S3 client ────────────────────────────────────────────────────────────────
@@ -168,11 +117,32 @@ class EmotionCreate(BaseModel):
     desc: str = ""
     tags: list[str] = []
     sha256: str = ""
+    format: str = ""
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 def _sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def _detect_image_format(data: bytes) -> str:
+    """Detect image format from magic bytes.
+
+    Returns one of 'png', 'jpg', 'gif', 'bmp', 'webp', or '' if unrecognised.
+    """
+    if len(data) < 12:
+        return ""
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "png"
+    if data[:3] == b"\xff\xd8\xff":
+        return "jpg"
+    if data[:4] == b"GIF8":
+        return "gif"
+    if data[:2] == b"BM":
+        return "bmp"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "webp"
+    return ""
 
 
 def _validate_sha256(sha256: str) -> None:
@@ -223,7 +193,7 @@ def list_emotions(
     tag_list = [t.strip() for t in tags.split(";")] if tags is not None else None
     where, where_params = _build_where(tag_list, desc)
 
-    db = _get_db()
+    db = get_db(DB_PATH)
     try:
         total = db.execute(
             f"SELECT COUNT(*) FROM emotion WHERE {where}", where_params
@@ -231,7 +201,7 @@ def list_emotions(
 
         offset = (page - 1) * page_size
         rows = db.execute(
-            f"SELECT desc, sha256, tags FROM emotion WHERE {where} ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+            f"SELECT desc, sha256, tags, format FROM emotion WHERE {where} ORDER BY updated_at DESC LIMIT ? OFFSET ?",
             where_params + [page_size, offset],
         ).fetchall()
     finally:
@@ -242,7 +212,7 @@ def list_emotions(
         "page": page,
         "page_size": page_size,
         "items": [
-            {"sha256": r["sha256"], "desc": r["desc"], "tags": json.loads(r["tags"])}
+            {"sha256": r["sha256"], "desc": r["desc"], "tags": json.loads(r["tags"]), "format": r["format"]}
             for r in rows
         ],
     }
@@ -300,9 +270,10 @@ async def get_emotion(sha256: str):
 # ── Routes: upload temp file ─────────────────────────────────────────────────
 @app.post("/emotions/upload")
 async def upload_temp_file(file: UploadFile):
-    """Accept an image file, save to temp dir, return its sha256."""
+    """Accept an image file, save to temp dir, return its sha256 and format."""
     data = await file.read()
     sha256 = _sha256_hex(data)
+    fmt = _detect_image_format(data)
 
     TEMP_EMOTIONS.mkdir(parents=True, exist_ok=True)
     dest = TEMP_EMOTIONS / sha256
@@ -310,7 +281,7 @@ async def upload_temp_file(file: UploadFile):
         dest.write_bytes(data)
 
     _reset_temp_timer()
-    return {"sha256": sha256}
+    return {"sha256": sha256, "format": fmt}
 
 
 # ── Routes: create emotion ───────────────────────────────────────────────────
@@ -353,18 +324,18 @@ def create_emotion(body: EmotionCreate):
             temp_file.unlink()
 
     now = _now()
-    db = _get_db()
+    db = get_db(DB_PATH)
     try:
         db.execute(
-            "INSERT INTO emotion (desc, sha256, tags, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (body.desc, body.sha256, json.dumps(body.tags, ensure_ascii=False), now, now),
+            "INSERT INTO emotion (desc, sha256, tags, format, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (body.desc, body.sha256, json.dumps(body.tags, ensure_ascii=False), body.format, now, now),
         )
         db.commit()
     finally:
         db.close()
 
-    _build_tag_cache()
+    _refresh_tag_cache()
     return Response(status_code=201)
 
 
@@ -373,7 +344,7 @@ def create_emotion(body: EmotionCreate):
 def update_emotion(sha256: str, body: EmotionUpdate):
     _validate_sha256(sha256)
 
-    db = _get_db()
+    db = get_db(DB_PATH)
     try:
         row = db.execute(
             "SELECT id FROM emotion WHERE sha256 = ? AND is_deleted = 0", (sha256,)
@@ -389,7 +360,7 @@ def update_emotion(sha256: str, body: EmotionUpdate):
     finally:
         db.close()
 
-    _build_tag_cache()
+    _refresh_tag_cache()
     return Response(status_code=204)
 
 
@@ -398,7 +369,7 @@ def update_emotion(sha256: str, body: EmotionUpdate):
 def delete_emotion(sha256: str):
     _validate_sha256(sha256)
 
-    db = _get_db()
+    db = get_db(DB_PATH)
     try:
         row = db.execute(
             "SELECT id FROM emotion WHERE sha256 = ? AND is_deleted = 0", (sha256,)
@@ -414,7 +385,7 @@ def delete_emotion(sha256: str):
     finally:
         db.close()
 
-    _build_tag_cache()
+    _refresh_tag_cache()
     return Response(status_code=204)
 
 

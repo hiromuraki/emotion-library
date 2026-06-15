@@ -330,6 +330,7 @@ let currentDockEmotion = null; // { sha256, desc, tags }
 let dockMode = 'view'; // 'view' | 'edit' | 'create'
 let dockModified = false;
 let pendingSha256 = null; // uploaded sha256 in create mode
+let pendingFormat = '';   // detected format in create mode
 let confirmResolve = null;
 
 const PAGE_SIZE = 100;
@@ -396,6 +397,7 @@ function updateHamburgerBadge(){ const n=selectedTags.size+(untaggedSelected?1:0
 function resetDockUI() {
   dockSkeleton.style.display = 'block';
   dockDropHint.style.display = 'none';
+  dockDropHint.textContent = '拖放图片到此处上传';
   dockDesc.value = '';
   dockTags.value = '';
   dockModified = false;
@@ -403,13 +405,14 @@ function resetDockUI() {
   dockDelete.style.display = 'none';
   dockSave.textContent = '保存';
   pendingSha256 = null;
+  pendingFormat = '';
 }
 
-function openDock(sha256, desc, tags) {
+function openDock(sha256, desc, tags, format) {
   dockMode = 'edit';
   dockTitle.textContent = '表情详情';
   resetDockUI();
-  currentDockEmotion = { sha256, desc, tags };
+  currentDockEmotion = { sha256, desc, tags, format: format || '' };
   // Load preview
   dockPreview.querySelectorAll('img').forEach(e=>e.remove());
   const img = document.createElement('img');
@@ -487,8 +490,9 @@ async function uploadFile(file) {
   try {
     const res = await fetch('/emotions/upload', { method: 'POST', body: form });
     if (!res.ok) throw new Error(await res.text());
-    const { sha256 } = await res.json();
+    const { sha256, format } = await res.json();
     pendingSha256 = sha256;
+    pendingFormat = format || '';
     const img = document.createElement('img');
     img.src = URL.createObjectURL(file);
     img.onload = () => { dockDropHint.style.display = 'none'; img.classList.add('loaded'); };
@@ -514,7 +518,7 @@ dockSave.addEventListener('click', async () => {
       const res = await fetch('/emotions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ desc, tags, sha256: pendingSha256 }),
+        body: JSON.stringify({ desc, tags, sha256: pendingSha256, format: pendingFormat }),
       });
       if (!res.ok) throw new Error(await res.text());
       showToast('已添加');
@@ -575,7 +579,7 @@ dockCopy.addEventListener('click', () => {
   if (currentDockEmotion) copyEmotion(currentDockEmotion.sha256);
 });
 dockDownload.addEventListener('click', () => {
-  if (currentDockEmotion) downloadEmotion(currentDockEmotion.sha256, currentDockEmotion.desc);
+  if (currentDockEmotion) downloadEmotion(currentDockEmotion.sha256, currentDockEmotion.desc, currentDockEmotion.format);
 });
 
 // ── Zoom ────────────────────────────────────────────────────
@@ -607,8 +611,10 @@ async function copyEmotion(sha256) {
   try { const img=new Image(); img.crossOrigin='anonymous'; await new Promise((rs,rj)=>{ img.onload=rs; img.onerror=()=>rj(new Error('fail')); img.src=url; }); const c=document.createElement('canvas'); c.width=img.naturalWidth; c.height=img.naturalHeight; c.getContext('2d').drawImage(img,0,0); const png=await new Promise(r=>c.toBlob(r,'image/png')); await navigator.clipboard.write([new ClipboardItem({'image/png':png})]); showToast('已复制'); return; } catch {}
   try { await navigator.clipboard.writeText(`${location.origin}${url}`); showToast('已复制链接'); } catch { showToast('复制失败'); }
 }
-function downloadEmotion(sha256, desc) {
-  const a=document.createElement('a'); a.href=`/emotions/${sha256}`; a.download=desc||sha256; document.body.appendChild(a); a.click(); a.remove(); showToast('下载中…');
+function downloadEmotion(sha256, desc, fmt) {
+  let name = desc || sha256;
+  if (fmt) name += '.' + fmt;
+  const a=document.createElement('a'); a.href=`/emotions/${sha256}`; a.download=name; document.body.appendChild(a); a.click(); a.remove(); showToast('下载中…');
 }
 
 function esc(str) { const d=document.createElement('div'); d.textContent=str; return d.innerHTML; }
@@ -647,6 +653,7 @@ function renderCards(items) {
     card.dataset.id = emo.sha256;
     card.dataset.desc = esc(emo.desc);
     card.dataset.tags = esc((emo.tags||[]).join(';'));
+    card.dataset.format = emo.format || '';
     card.innerHTML = `
       <div class="card-img-wrap">
         <div class="skeleton"></div>
@@ -667,13 +674,13 @@ function renderCards(items) {
     card.addEventListener('click', e => {
       if (e.target.closest('.card-action-btn')) return;
       const tags = card.dataset.tags ? card.dataset.tags.split(';').filter(Boolean) : [];
-      openDock(card.dataset.id, card.dataset.desc, tags);
+      openDock(card.dataset.id, card.dataset.desc, tags, card.dataset.format);
     });
     card.querySelectorAll('.card-action-btn').forEach(btn => {
       btn.addEventListener('click', e => {
         e.stopPropagation();
         if (btn.dataset.action === 'copy') copyEmotion(card.dataset.id);
-        else downloadEmotion(card.dataset.id, card.dataset.desc);
+        else downloadEmotion(card.dataset.id, card.dataset.desc, card.dataset.format);
       });
     });
     grid.appendChild(card);
